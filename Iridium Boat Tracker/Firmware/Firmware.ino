@@ -69,9 +69,15 @@
  #include "LaunchPad.h"
  
  #define BLYNK_TEMPLATE_ID    "TMPL"
- #define BLYNK_TEMPLATE_NAME  ""
- #define BLYNK_AUTH_TOKEN     ""
- 
+ #define BLYNK_TEMPLATE_NAME "Satellite Boat Tracker"
+ #define BLYNK_AUTH_TOKEN "C8L2wOG5EEy3nrxXIgNoRUctetdW08a0"
+
+ const int AUX_OUT1 = 5;
+ const int AUX_OUT2 = 4;
+ const int AUX_OUT3 = 7;
+
+// #define BLYNK_TEMPLATE_NAME "Iridium 9704 Launch Pad Free"
+// #define BLYNK_AUTH_TOKEN "StFfxoeeFLjFTk5T4Nzwg1Cd9C0irrgq"
  /**
   * Dashboard update type
   */
@@ -205,6 +211,11 @@
    const Ticks STATUS_UPDATE_PERIOD_MS = (5 * 1000);                           /**< Minimum time between status updates in milliseconds (to reduce frequency of updates). */
    statusUpdateTimer.setDurationMs(STATUS_UPDATE_PERIOD_MS);
    statusUpdateTimer.start();
+
+   // Auxilary output pins
+   pinMode(AUX_OUT1, OUTPUT);
+   pinMode(AUX_OUT2, OUTPUT);
+   pinMode(AUX_OUT3, OUTPUT);
  }
  
  /**
@@ -424,6 +435,11 @@
    int messageLength = createDashboardMessage(dashboardData, updateMessageBuffer, sizeof(updateMessageBuffer));
    if (messageLength > 0)
    {
+
+    Serial.println("**** debug1");
+    Serial.println(updateMessageBuffer);
+    Serial.println("**** debug1 end");
+
      updateMessageRequestReference = getMessageRequestReference();
  
      Serial.print(SEND_TO_TRANSCEIVER_PROMPT);
@@ -829,7 +845,7 @@
          "\"https://blynk.cloud"        //  <value> Blynk cloud URL
          "/external/api/get?"           //  <value> Blynk HTTPS API Get Datastream Value
          "token=%s"                     //  <value> Blynk Blueprint token
-         "&V0\""                        //  <value> Blynk datastream "Alert Switch"
+         "&V0&V19&V20&V21\""                        //  <value> Blynk datastreams"
                                         // JSON key:value pair end
        "}"                            // JSON array element end
        ","                          // JSON array element deliminator
@@ -1019,6 +1035,11 @@
   */
  static void processHttpResponse(const char jsonString[])
  {
+
+   Serial.println("*** debug2");
+   Serial.println(jsonString);
+   Serial.println("*** debug2 end");
+
    /*
      Use ZERO-COPY when deserializing the JSON data.
      This means the string containing the data will be modified in memory
@@ -1031,16 +1052,7 @@
    const int HTTP_SUCCESS = 200;
    if (alertStatus == HTTP_SUCCESS)
    {
-     Serial.print(MESSAGE_EVENT_PROMPT);
-     Serial.println("Received reply from IoT dashboard, update successful.");
-     int alertSwitch = jsonObject["data"];
- 
-     if (alertSwitch == 1)
-     {
-       Serial.print(MESSAGE_EVENT_PROMPT);
-       Serial.println("** Alert Received! **");
-       buzzer.playToneSequence(ALERT_TONE_SEQUENCE);
-     }
+     processReply();
    }
    return;
  }
@@ -1212,4 +1224,59 @@
      string[stringLength] = 0;
    }
  }
+
+void processReply(void) 
+{
+    Serial.print(MESSAGE_EVENT_PROMPT);
+    Serial.println("Received reply from IoT dashboard, update successful.");
+
+    Serial.println("*** debug3:");
+    String s = jsonObject["data"];
+    Serial.println(s);
+
+    // Extract the data field which contains our nested JSON string
+    String cleanNestedJson = jsonObject["data"];
+    // Replace single quotes with double quotes to conform with JSON spec
+    cleanNestedJson.replace("'", "\"");  
+
+    JsonDocument nestedDoc;
+    DeserializationError error = deserializeJson(nestedDoc, cleanNestedJson);
+    if (error) 
+    {
+      Serial.printf("Nested JSON parsing failed: %s\n", error.c_str());
+      return;
+    }    
+
+    processAlarm(nestedDoc);    
+    processAuxOuts(nestedDoc);    
+}
+
+/*
+* Sounds the Alarm if set on the dashboard
+*/
+void processAlarm(JsonDocument& nestedDoc) 
+{
+  if (nestedDoc["V0"] == 1) 
+  {
+    Serial.println("** Sound Alarm Received! **");
+    buzzer.playToneSequence(ALERT_TONE_SEQUENCE);
+  }
+}
+
+/*
+* Sets the Auxilary Output pins from the Dashboard values
+*/
+void processAuxOuts(JsonDocument& nestedDoc) 
+{
+  // Set pins according to extracted values
+  digitalWrite(AUX_OUT1, nestedDoc["V19"] ? HIGH : LOW);  
+  digitalWrite(AUX_OUT2, nestedDoc["V20"] ? HIGH : LOW);
+  digitalWrite(AUX_OUT3, nestedDoc["V21"] ? HIGH : LOW);
+  
+  // Debug output
+  Serial.println("Aux Out Pin States:");
+  Serial.printf("AUX_OUT1, V19 (Pin 5): %i\n", digitalRead(AUX_OUT1));
+  Serial.printf("AUX_OUT2, V20 (Pin 4): %i\n", digitalRead(AUX_OUT2));
+  Serial.printf("AUX_OUT3, V21 (Pin 7): %i\n", digitalRead(AUX_OUT3));
+}
  
