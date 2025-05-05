@@ -149,6 +149,12 @@
  
  static JsonDocument jsonDoc;     /**< Arduino JSON library document. */
  static JsonObject   jsonObject;  /**< Arduino JSON library object. */
+
+ static int geoFenceRadius = -1;
+ static float geoFenceLat;
+ static float geoFenceLon;
+ static float currentLat;
+ static float currentLon;
  
  /**
   * Pre-built message used for requesting the number of free messages remaining in the free trial.
@@ -161,6 +167,16 @@
  "\x2f"                                    // Message CRC (MSB)
  "\xa6";                                   // Message CRC (LSB)
  
+ /**
+  * Pre-built SOS event
+  * The token is overwritten with BLYNK_AUTH_TOKEN in setup()
+  */
+ static char SOS_EVENT_MESSAGE[] =
+ "{"                                       // JSON data begin
+   "\"cmd\":\"GET\","                      // JSON key:value pair
+   "\"url\":\"https://blynk.cloud/external/api/logEvent?token=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx&code=sos\""  // JSON key:value pair
+ "}";                                       // JSON data end
+
  /**
   * Called once by the Arduino Board Core package at startup.
   */
@@ -216,6 +232,8 @@
    pinMode(AUX_OUT1, OUTPUT);
    pinMode(AUX_OUT2, OUTPUT);
    pinMode(AUX_OUT3, OUTPUT);
+
+  //  testCalculateDistance();
  }
  
  /**
@@ -374,20 +392,28 @@
   */
  static void loopCheckUserButton(void)
  {
-   const int USER_BUTTON_STARTUP_TRANSCEIVER_DURATION_MS  = 1500;  /**< How long to hold down the user button to startup the transceiver in milliseconds. */
-   const int USER_BUTTON_SHUTDOWN_TRANSCEIVER_DURATION_MS = 1500;  /**< How long to hold down the user button to shutdown the transceiver in milliseconds. */
+
+   const int USER_BUTTON_SOS_DURATION_MS  = 5000;  /**< How long to hold down the user button to signal an SOS event. */
+
+   if (userButton.pressedFor(USER_BUTTON_SOS_DURATION_MS))
+   {
+     sendSOSEvent();
+   }
+
+  //  const int USER_BUTTON_STARTUP_TRANSCEIVER_DURATION_MS  = 1500;  /**< How long to hold down the user button to startup the transceiver in milliseconds. */
+  //  const int USER_BUTTON_SHUTDOWN_TRANSCEIVER_DURATION_MS = 1500;  /**< How long to hold down the user button to shutdown the transceiver in milliseconds. */
  
-   if ((transceiver.isBooted() == false)
-       && (userButton.pressedFor(USER_BUTTON_STARTUP_TRANSCEIVER_DURATION_MS)))
-   {
-     transceiverStartup();
-   }
-   else
-   if ((transceiver.isBooted() == true)
-       && (userButton.pressedFor(USER_BUTTON_SHUTDOWN_TRANSCEIVER_DURATION_MS)))
-   {
-     transceiverShutdown();
-   }
+  //  if ((transceiver.isBooted() == false)
+  //      && (userButton.pressedFor(USER_BUTTON_STARTUP_TRANSCEIVER_DURATION_MS)))
+  //  {
+  //    transceiverStartup();
+  //  }
+  //  else
+  //  if ((transceiver.isBooted() == true)
+  //      && (userButton.pressedFor(USER_BUTTON_SHUTDOWN_TRANSCEIVER_DURATION_MS)))
+  //  {
+  //    transceiverShutdown();
+  //  }
  }
  
  /**
@@ -845,7 +871,7 @@
          "\"https://blynk.cloud"        //  <value> Blynk cloud URL
          "/external/api/get?"           //  <value> Blynk HTTPS API Get Datastream Value
          "token=%s"                     //  <value> Blynk Blueprint token
-         "&V0&V19&V20&V21\""                        //  <value> Blynk datastreams"
+         "&V0&V13&V19&V20&V21\""        //  <value> Blynk datastreams"
                                         // JSON key:value pair end
        "}"                            // JSON array element end
        ","                          // JSON array element deliminator
@@ -860,14 +886,15 @@
          "&V1=%d"                       //  <value> Blynk datastream "Signal Bars"
          "&V2=%.2f"                     //  <value> Blynk datastream "Battery Voltage"
          "&V3=%s"                       //  <value> Blynk datastream "Update Reason" string
-         "&V4=%s"                       //  <value> Blynk datastream "GNSS Data" string (date time UTC, latitude, longitude, speed)
+        //  "&V4=%s"                       //  <value> Blynk datastream "GNSS Data" string (date time UTC, latitude, longitude, speed)
                                         // Premium Blueprint Data Begin
          "&V5=%d"                       //  <value> Blynk datastream "Temperature"
          "&V6=%d"                       //  <value> Blynk datastream "Signal Level" (transceiver signal strength in dbm)
          "&V7=%s"                       //  <value> Blynk datastream "GNSS Timestamp string" (date time UTC)
-         "%s"                           //  <value> Blynk datastream "Latitude,Longitude" map coordinates
-         "&v9=%s"                       //  <value> Blynk datastream "Latitude Longitude" string
-         "&v10=%d"                      //  <value> Blynk datastream "Altitude"
+         "&V8=%.6f&V8=%.6f"                       //  <value> Blynk datastream "Longitude,Latitude" map coordinates
+        //  "%s"                           //  <value> Blynk datastream "Latitude,Longitude" map coordinates
+         "&V9=%s"                       //  <value> Blynk datastream "Latitude Longitude" string
+        //  "&v10=%d"                      //  <value> Blynk datastream "Altitude"
          "&v11=%d"                      //  <value> Blynk datastream "Speed"
          "&v12=%d\""                    //  <value> Blynk datastream "Heading"
                                       // JSON key:value pair end
@@ -927,13 +954,16 @@
                          dashboardData.signalBars,
                          dashboardData.batteryVoltage,
                          convertUpdateTypeToString(dashboardData.updateType),
-                         gnssDataString,
+                        //  gnssDataString,
                          dashboardData.temperatureDegC,
                          dashboardData.signalStrengthdBm,
                          gnssDateTimeString,
-                         mapLatLongString,
+                         dashboardData.gnss.longitudeDegrees,
+                         dashboardData.gnss.latitudeDegrees,
                          gnssLatLonString,
-                         dashboardData.gnss.altitudeMeters,
+                        //  mapLatLongString,
+                        //  gnssLatLonString,
+                        //  dashboardData.gnss.altitudeMeters,
                          dashboardData.gnss.speedKph,
                          dashboardData.gnss.headingDegrees);
  
@@ -1248,6 +1278,7 @@ void processReply(void)
     }    
 
     processAlarm(nestedDoc);    
+    processGeoFence(nestedDoc);    
     processAuxOuts(nestedDoc);    
 }
 
@@ -1261,6 +1292,17 @@ void processAlarm(JsonDocument& nestedDoc)
     Serial.println("** Sound Alarm Received! **");
     buzzer.playToneSequence(ALERT_TONE_SEQUENCE);
   }
+}
+
+/*
+* Sets the GEO Fence Radius
+*/
+void processGeoFence(JsonDocument& nestedDoc) 
+{
+  // float geoFenceRadius = nestedDoc["V13"];
+  // float geoFenceLat = getLatitudeDirection(const float latitudeDeg);
+
+  // Serial.printf("GEO Fence Radius set to %i\n", geoFenceRadius);
 }
 
 /*
@@ -1279,4 +1321,105 @@ void processAuxOuts(JsonDocument& nestedDoc)
   Serial.printf("AUX_OUT2, V20 (Pin 4): %i\n", digitalRead(AUX_OUT2));
   Serial.printf("AUX_OUT3, V21 (Pin 7): %i\n", digitalRead(AUX_OUT3));
 }
- 
+
+/**
+ * Calculate distance between two points, A and B, on Earth's surface
+ * @param latA Point A latitude in decimal degrees
+ * @param lonA Point A longitude in decimal degrees
+ * @param latB Point B latitude in decimal degrees
+ * @param lonB Point B longitude in decimal degrees
+ * @return Distance in meters
+ */
+float calculateDistance(float latA, float lonA, float latB, float lonB)
+{
+  // Earth's radius in meters
+  const float R = 6371000.0;
+  
+  // Convert degrees to radians
+  float latARad = radians(latA);
+  float lonARad = radians(lonA);
+  float latBRad = radians(latB);
+  float lonBRad = radians(lonB);
+  
+  // Difference in coordinates
+  float dLat = latBRad - latARad;
+  float dLon = lonBRad - lonARad;
+  
+  // Haversine formula
+  float a = sin(dLat/2) * sin(dLat/2) +
+            cos(latARad) * cos(latBRad) * 
+            sin(dLon/2) * sin(dLon/2);
+  
+  float c = 2 * atan2(sqrt(a), sqrt(1-a));
+  
+  // Distance in meters
+  float distance = R * c;
+  
+  return distance;
+}
+
+// void testCalculateDistance(void) 
+// {
+//   float ptALat = 51.590590763654625;
+//   float ptALon = -0.09748588689186495;
+//   float ptBLat = 51.59069197240872;
+//   float ptBLon = -0.09402955955255156;
+//   int expected = 239;
+//   float d = calculateDistance(ptALat, ptALon, ptBLat, ptBLon);
+//   Serial.printf("*** distance point a to point b: %.0f, expected: %i\n", d, expected);
+// }
+
+bool checkGeoFenceBreach(void) 
+{
+  if (geoFenceRadius == -1) 
+  {
+    return false;
+  } 
+  if (isnan(geoFenceLat) || isnan(geoFenceLon) || isnan(currentLat) || isnan(currentLon)) 
+  {
+    return false;
+  } 
+
+  return calculateDistance(currentLat, currentLon, geoFenceLat, geoFenceLon) > geoFenceRadius;
+}
+
+int prepareSosEventMessage(char* buffer) {
+  static const char baseMessage[] =
+   "{"                                       // JSON data begin
+     "\"cmd\":\"GET\","                      // JSON key:value pair
+     "\"url\":\"https://blynk.cloud/external/api/logEvent?token=C8L2wOG5EEy3nrxXIgNoRUctetdW08a0&code=sos\""  // Using the defined token
+    //  "\"url\":\"https://blynk.cloud/external/api/logEvent?token=" BLYNK_AUTH_TOKEN "&code=sos\""  // Using the defined token
+   "}";
+  
+  Serial.println(baseMessage);
+  Serial.printf("*** dbg1:%s:\n", baseMessage);
+
+  size_t baseLength = sizeof(baseMessage) - 1; // Subtract 1 to exclude null terminator
+  
+  memcpy(buffer, baseMessage, baseLength);
+  
+  // Calculate message CRC and append to message
+  int crc = TIL_crc(buffer, baseLength, 0);
+  byte crcMSB = (crc & 0xFF00) >> 8;
+  byte crcLSB = (crc & 0x00FF);
+  buffer[baseLength] = crcMSB;
+  buffer[baseLength + 1] = crcLSB;
+  buffer[baseLength + 2] = 0x00;
+  
+  return baseLength + 2; // Base message length + 2 CRC bytes
+}
+
+void sendSOSEvent(void) 
+{
+  int length = prepareSosEventMessage(updateMessageBuffer);
+
+  String s = String(updateMessageBuffer);
+  Serial.println(updateMessageBuffer);
+  Serial.printf("*** dbg:%s: len %i, %i\n", updateMessageBuffer, s.length(), length);
+
+  updateMessageRequestReference = getMessageRequestReference();
+
+  Serial.print(SEND_TO_TRANSCEIVER_PROMPT);
+  Serial.println("User button pressed for SOS event.");
+  transceiver.messageSend(HTTP_TOPIC_ID, length, updateMessageRequestReference);
+}
