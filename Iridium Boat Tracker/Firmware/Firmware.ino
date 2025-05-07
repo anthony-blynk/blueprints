@@ -1260,12 +1260,17 @@ void processReply(void)
     Serial.print(MESSAGE_EVENT_PROMPT);
     Serial.println("Received reply from IoT dashboard, update successful.");
 
-    Serial.println("*** debug3:");
-    String s = jsonObject["data"];
-    Serial.println(s);
+    // Serial.println("*** debug3:");
+    // String s = jsonObject["data"];
+    // Serial.println(s);
 
     // Extract the data field which contains our nested JSON string
     String cleanNestedJson = jsonObject["data"];
+    if (cleanNestedJson.length() == 0)
+    {
+      return;
+    }
+
     // Replace single quotes with double quotes to conform with JSON spec
     cleanNestedJson.replace("'", "\"");  
 
@@ -1274,6 +1279,7 @@ void processReply(void)
     if (error) 
     {
       Serial.printf("Nested JSON parsing failed: %s\n", error.c_str());
+      Serial.printf(":%s:\n", cleanNestedJson);
       return;
     }    
 
@@ -1385,17 +1391,20 @@ bool checkGeoFenceBreach(void)
 
 int prepareSosEventMessage(char* buffer) {
   static const char baseMessage[] =
+  "{"                            // JSON data begin
+  "\"requests\":"                // JSON key:value pair begin "array":
+  "["                            // JSON array begin
    "{"                                       // JSON data begin
      "\"cmd\":\"GET\","                      // JSON key:value pair
-     "\"url\":\"https://blynk.cloud/external/api/logEvent?token=C8L2wOG5EEy3nrxXIgNoRUctetdW08a0&code=sos\""  // Using the defined token
-    //  "\"url\":\"https://blynk.cloud/external/api/logEvent?token=" BLYNK_AUTH_TOKEN "&code=sos\""  // Using the defined token
-   "}";
-  
-  Serial.println(baseMessage);
-  Serial.printf("*** dbg1:%s:\n", baseMessage);
+    //  "\"url\":\"https://blynk.cloud/external/api/logEvent?token=C8L2wOG5EEy3nrxXIgNoRUctetdW08a0&code=sos\""  // Using the defined token
+     "\"url\":\"https://blynk.cloud/external/api/logEvent?token=" BLYNK_AUTH_TOKEN "&code=sos\""  // Using the defined token
+   "}"
+  "]"                            // JSON array end
+  "}";                           // JSON data end
 
-  size_t baseLength = sizeof(baseMessage) - 1; // Subtract 1 to exclude null terminator
-  
+  // Serial.printf("*** dbg1:%s:\n", baseMessage); 
+
+  size_t baseLength = sizeof(baseMessage) - 1; // Subtract 1 to exclude null terminator  
   memcpy(buffer, baseMessage, baseLength);
   
   // Calculate message CRC and append to message
@@ -1413,9 +1422,9 @@ void sendSOSEvent(void)
 {
   int length = prepareSosEventMessage(updateMessageBuffer);
 
-  String s = String(updateMessageBuffer);
-  Serial.println(updateMessageBuffer);
-  Serial.printf("*** dbg:%s: len %i, %i\n", updateMessageBuffer, s.length(), length);
+  // String s = String(updateMessageBuffer);
+  // Serial.println(updateMessageBuffer);
+  // Serial.printf("*** dbg:%s: len %i, %i\n", updateMessageBuffer, s.length(), length);
 
   updateMessageRequestReference = getMessageRequestReference();
 
