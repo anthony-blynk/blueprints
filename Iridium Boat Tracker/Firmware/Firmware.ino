@@ -150,11 +150,11 @@
  static JsonDocument jsonDoc;     /**< Arduino JSON library document. */
  static JsonObject   jsonObject;  /**< Arduino JSON library object. */
 
- static int geoFenceRadius = -1;
+ static int geoFenceAlarm;
+ static int previousGeoFenceAlarm;
+ static int geoFenceRadius;
  static float geoFenceLat;
  static float geoFenceLon;
- static float currentLat;
- static float currentLon;
  
  /**
   * Pre-built message used for requesting the number of free messages remaining in the free trial.
@@ -167,16 +167,6 @@
  "\x2f"                                    // Message CRC (MSB)
  "\xa6";                                   // Message CRC (LSB)
  
- /**
-  * Pre-built SOS event
-  * The token is overwritten with BLYNK_AUTH_TOKEN in setup()
-  */
- static char SOS_EVENT_MESSAGE[] =
- "{"                                       // JSON data begin
-   "\"cmd\":\"GET\","                      // JSON key:value pair
-   "\"url\":\"https://blynk.cloud/external/api/logEvent?token=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx&code=sos\""  // JSON key:value pair
- "}";                                       // JSON data end
-
  /**
   * Called once by the Arduino Board Core package at startup.
   */
@@ -250,7 +240,7 @@
    transceiver.loop();
  
    loopCheckUserButton();
- 
+
    if (transceiver.isReadyToSendMessage() == true)
    {
      if (strlen(BLYNK_AUTH_TOKEN) == 0)
@@ -392,28 +382,12 @@
   */
  static void loopCheckUserButton(void)
  {
-
    const int USER_BUTTON_SOS_DURATION_MS  = 5000;  /**< How long to hold down the user button to signal an SOS event. */
 
    if (userButton.pressedFor(USER_BUTTON_SOS_DURATION_MS))
    {
      sendSOSEvent();
    }
-
-  //  const int USER_BUTTON_STARTUP_TRANSCEIVER_DURATION_MS  = 1500;  /**< How long to hold down the user button to startup the transceiver in milliseconds. */
-  //  const int USER_BUTTON_SHUTDOWN_TRANSCEIVER_DURATION_MS = 1500;  /**< How long to hold down the user button to shutdown the transceiver in milliseconds. */
- 
-  //  if ((transceiver.isBooted() == false)
-  //      && (userButton.pressedFor(USER_BUTTON_STARTUP_TRANSCEIVER_DURATION_MS)))
-  //  {
-  //    transceiverStartup();
-  //  }
-  //  else
-  //  if ((transceiver.isBooted() == true)
-  //      && (userButton.pressedFor(USER_BUTTON_SHUTDOWN_TRANSCEIVER_DURATION_MS)))
-  //  {
-  //    transceiverShutdown();
-  //  }
  }
  
  /**
@@ -478,6 +452,16 @@
      transceiver.messageSend(HTTP_TOPIC_ID, messageLength, updateMessageRequestReference);
    }
  
+   // if the geo fence alarm was switched on then save the current position
+   if (geoFenceAlarm && !previousGeoFenceAlarm)
+   {
+     geoFenceLat = dashboardData.gnss.latitudeDegrees;
+     geoFenceLon = dashboardData.gnss.longitudeDegrees;
+     Serial.printf("GEO Fence set to %.5f,%.5f\n", geoFenceLat, geoFenceLon);
+   }
+
+   checkGeoFenceBreach(dashboardData.gnss);
+
    dashboardUpdateTimer.start();
  }
  
@@ -871,7 +855,7 @@
          "\"https://blynk.cloud"        //  <value> Blynk cloud URL
          "/external/api/get?"           //  <value> Blynk HTTPS API Get Datastream Value
          "token=%s"                     //  <value> Blynk Blueprint token
-         "&V0&V13&V19&V20&V21\""        //  <value> Blynk datastreams"
+         "&V0&V13&V14&V15&V19&V20&V21\""        //  <value> Blynk datastreams"
                                         // JSON key:value pair end
        "}"                            // JSON array element end
        ","                          // JSON array element deliminator
@@ -946,7 +930,7 @@
                dashboardData.gnss.longitudeDegrees,
                dashboardData.gnss.latitudeDegrees);
    }
- 
+
    // Generate the message using the message template
    int length = snprintf(buffer, (bufferSize - MESSAGE_CRC_LENGTH), MESSAGE_TEMPLATE,
                          BLYNK_AUTH_TOKEN,       // Array[0] data
@@ -1283,8 +1267,9 @@ void processReply(void)
       return;
     }    
 
-    processAlarm(nestedDoc);    
-    processGeoFence(nestedDoc);    
+    processAlarm(nestedDoc);
+    processGeoFence(nestedDoc);
+    processUpdateFreq(nestedDoc);
     processAuxOuts(nestedDoc);    
 }
 
@@ -1305,11 +1290,37 @@ void processAlarm(JsonDocument& nestedDoc)
 */
 void processGeoFence(JsonDocument& nestedDoc) 
 {
-  // float geoFenceRadius = nestedDoc["V13"];
-  // float geoFenceLat = getLatitudeDirection(const float latitudeDeg);
+  int a = nestedDoc["V14"];
+  if (geoFenceAlarm != a)
+  {
+    previousGeoFenceAlarm = geoFenceAlarm;
+    geoFenceAlarm = a;
+    Serial.printf("GEO Fence Alarm changed to %i\n", geoFenceAlarm);
+  }
 
-  // Serial.printf("GEO Fence Radius set to %i\n", geoFenceRadius);
+  int r = nestedDoc["V13"];
+  if (geoFenceRadius != r)
+  {
+    geoFenceRadius = r;
+    Serial.printf("GEO Fence Radius changed to %i\n", geoFenceRadius);
+  }
 }
+
+/*
+* Sets the time between updates
+  // TODO: use actual time values
+*/
+void processUpdateFreq(JsonDocument& nestedDoc) 
+{
+  int updateFreq = nestedDoc["V15"];
+  int updateFreqMs = updateFreq * 1000;
+  if (updateFreqMs != dashboardUpdateTimer.getDurationMs())
+  {
+     dashboardUpdateTimer.setDurationMs(updateFreqMs);
+     Serial.printf("dashboard update interval set to %i secs\n", updateFreq);
+  }
+}
+
 
 /*
 * Sets the Auxilary Output pins from the Dashboard values
@@ -1375,37 +1386,73 @@ float calculateDistance(float latA, float lonA, float latB, float lonB)
 //   Serial.printf("*** distance point a to point b: %.0f, expected: %i\n", d, expected);
 // }
 
-bool checkGeoFenceBreach(void) 
+bool checkGeoFenceBreach(GnssData gnss) 
 {
-  if (geoFenceRadius == -1) 
+  Serial.println("chkGeo dbg 1");
+  Serial.printf("geo alarm %i\n", geoFenceAlarm);
+  Serial.printf("geo radius %i\n", geoFenceRadius);
+  Serial.printf("geo fence lat,lon %.5f,%.5f\n", geoFenceLat, geoFenceLon);
+  Serial.printf("gnss fix %i\n", gnss.fixValid);
+  Serial.printf("gnss lat,lon %.5f,%.5f\n", gnss.latitudeDegrees, gnss.longitudeDegrees);
+  
+  if (!gnss.fixValid || (geoFenceAlarm != 1)) 
   {
     return false;
   } 
-  if (isnan(geoFenceLat) || isnan(geoFenceLon) || isnan(currentLat) || isnan(currentLon)) 
+  Serial.println("chkGeo dbg 2");
+  if (isnan(geoFenceLat) || isnan(geoFenceLon) || isnan(gnss.latitudeDegrees) || isnan(gnss.longitudeDegrees)) 
   {
     return false;
   } 
 
-  return calculateDistance(currentLat, currentLon, geoFenceLat, geoFenceLon) > geoFenceRadius;
+  Serial.println("chkGeo dbg 3");
+  float fenceDistance = calculateDistance(gnss.latitudeDegrees, gnss.longitudeDegrees, geoFenceLat, geoFenceLon);
+  bool geoFenceBreached = fenceDistance > geoFenceRadius;
+  Serial.printf("chkGeo dbg 4 distance=%d, breached: %d\n", fenceDistance, geoFenceBreached);
+
+  if (!geoFenceBreached) 
+  {
+    return false;
+  }
+
+  sendGeoFenceBreachedEvent();
+  return true;
 }
 
-int prepareSosEventMessage(char* buffer) {
-  static const char baseMessage[] =
+void sendEvent(const char* eventType, const char* eventDescription) 
+{
+  int length = prepareEventMessage(updateMessageBuffer, eventType);
+
+  updateMessageRequestReference = getMessageRequestReference();
+
+  Serial.print(SEND_TO_TRANSCEIVER_PROMPT);
+  Serial.println(eventDescription);
+  transceiver.messageSend(HTTP_TOPIC_ID, length, updateMessageRequestReference);
+
+  // if (strcmp(eventType, "geofence") == 0) {
+  //   delay(20000); // Only for geofence events
+  // }
+}
+
+int prepareEventMessage(char* buffer, const char* eventCode) {
+  static const char baseMessageTemplate[] =
   "{"                            // JSON data begin
   "\"requests\":"                // JSON key:value pair begin "array":
   "["                            // JSON array begin
    "{"                                       // JSON data begin
      "\"cmd\":\"GET\","                      // JSON key:value pair
-    //  "\"url\":\"https://blynk.cloud/external/api/logEvent?token=C8L2wOG5EEy3nrxXIgNoRUctetdW08a0&code=sos\""  // Using the defined token
-     "\"url\":\"https://blynk.cloud/external/api/logEvent?token=" BLYNK_AUTH_TOKEN "&code=sos\""  // Using the defined token
+     "\"url\":\"https://blynk.cloud/external/api/logEvent?token=" BLYNK_AUTH_TOKEN "&code=%s\""  // Using the defined token
    "}"
   "]"                            // JSON array end
   "}";                           // JSON data end
 
-  // Serial.printf("*** dbg1:%s:\n", baseMessage); 
+  // Calculate the required buffer size
+  size_t neededSize = snprintf(NULL, 0, baseMessageTemplate, eventCode) + 1;
+  char formattedMessage[neededSize];
+  snprintf(formattedMessage, neededSize, baseMessageTemplate, eventCode);
 
-  size_t baseLength = sizeof(baseMessage) - 1; // Subtract 1 to exclude null terminator  
-  memcpy(buffer, baseMessage, baseLength);
+  size_t baseLength = strlen(formattedMessage);
+  memcpy(buffer, formattedMessage, baseLength);
   
   // Calculate message CRC and append to message
   int crc = TIL_crc(buffer, baseLength, 0);
@@ -1418,17 +1465,11 @@ int prepareSosEventMessage(char* buffer) {
   return baseLength + 2; // Base message length + 2 CRC bytes
 }
 
-void sendSOSEvent(void) 
-{
-  int length = prepareSosEventMessage(updateMessageBuffer);
+// Wrapper functions for specific event types
+void sendGeoFenceBreachedEvent(void) {
+  sendEvent("geofence", "GEO Fence Breached event.");
+}
 
-  // String s = String(updateMessageBuffer);
-  // Serial.println(updateMessageBuffer);
-  // Serial.printf("*** dbg:%s: len %i, %i\n", updateMessageBuffer, s.length(), length);
-
-  updateMessageRequestReference = getMessageRequestReference();
-
-  Serial.print(SEND_TO_TRANSCEIVER_PROMPT);
-  Serial.println("User button pressed for SOS event.");
-  transceiver.messageSend(HTTP_TOPIC_ID, length, updateMessageRequestReference);
+void sendSOSEvent(void) {
+  sendEvent("sos", "User button pressed for SOS event.");
 }
